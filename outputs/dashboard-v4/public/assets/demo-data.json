@@ -1,0 +1,399 @@
+{
+  "source": "Пробуем отклонить_anonymized.xlsx",
+  "applications": 175970,
+  "applicants": 61306,
+  "multi_direction_applicants": 47206,
+  "three_plus_direction_applicants": 28523,
+  "consents": 14239,
+  "control_failed": 29237,
+  "status_counts": {
+    "Участвует в конкурсе": 137895,
+    "На рассмотрении": 33100,
+    "Ожидание результатов ВИ": 3993,
+    "Новое": 977,
+    "Отозвано": 4,
+    "Не указан": 1
+  },
+  "top_intersections": [
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Прикладная информатика",
+      "applicants": 8673
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Информационные системы и технологии",
+      "applicants": 6283
+    },
+    {
+      "direction_a": "Информационные системы и технологии",
+      "direction_b": "Прикладная информатика",
+      "applicants": 3923
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Наземные транспортно-технологические средства",
+      "applicants": 3584
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Машиностроение",
+      "applicants": 3426
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Информационная безопасность",
+      "applicants": 2789
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Электроэнергетика и электротехника",
+      "applicants": 2767
+    },
+    {
+      "direction_a": "Автоматизация технологических процессов и производств",
+      "direction_b": "Информатика и вычислительная техника",
+      "applicants": 2332
+    },
+    {
+      "direction_a": "Инноватика",
+      "direction_b": "Информатика и вычислительная техника",
+      "applicants": 2232
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Строительство",
+      "applicants": 2201
+    },
+    {
+      "direction_a": "Наземные транспортно-технологические средства",
+      "direction_b": "Прикладная информатика",
+      "applicants": 2194
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Прикладная математика и информатика",
+      "applicants": 2085
+    },
+    {
+      "direction_a": "Машиностроение",
+      "direction_b": "Прикладная информатика",
+      "applicants": 2080
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Реклама и связи с общественностью",
+      "applicants": 1822
+    },
+    {
+      "direction_a": "Информационная безопасность",
+      "direction_b": "Прикладная информатика",
+      "applicants": 1767
+    },
+    {
+      "direction_a": "Прикладная информатика",
+      "direction_b": "Электроэнергетика и электротехника",
+      "applicants": 1718
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Информационная безопасность автоматизированных систем",
+      "applicants": 1544
+    },
+    {
+      "direction_a": "Информационные системы и технологии",
+      "direction_b": "Наземные транспортно-технологические средства",
+      "applicants": 1521
+    },
+    {
+      "direction_a": "Информационные системы и технологии",
+      "direction_b": "Машиностроение",
+      "applicants": 1490
+    },
+    {
+      "direction_a": "Прикладная информатика",
+      "direction_b": "Строительство",
+      "applicants": 1460
+    },
+    {
+      "direction_a": "Автоматизация технологических процессов и производств",
+      "direction_b": "Прикладная информатика",
+      "applicants": 1452
+    },
+    {
+      "direction_a": "Инноватика",
+      "direction_b": "Прикладная информатика",
+      "applicants": 1355
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Материаловедение и технологии материалов",
+      "applicants": 1331
+    },
+    {
+      "direction_a": "Информатика и вычислительная техника",
+      "direction_b": "Менеджмент",
+      "applicants": 1304
+    }
+  ],
+  "top_directions": [
+    {
+      "Направление\\специальность": "Информатика и вычислительная техника",
+      "applications": 41251,
+      "applicants": 30566,
+      "consents": 3085,
+      "median_score": 230.0,
+      "control_failed": 5413,
+      "consent_rate": 7.48
+    },
+    {
+      "Направление\\специальность": "Прикладная информатика",
+      "applications": 21981,
+      "applicants": 18694,
+      "consents": 1642,
+      "median_score": 234.0,
+      "control_failed": 2596,
+      "consent_rate": 7.47
+    },
+    {
+      "Направление\\специальность": "Информационные системы и технологии",
+      "applications": 15215,
+      "applicants": 13566,
+      "consents": 1221,
+      "median_score": 229.0,
+      "control_failed": 2388,
+      "consent_rate": 8.02
+    },
+    {
+      "Направление\\специальность": "Наземные транспортно-технологические средства",
+      "applications": 8027,
+      "applicants": 7585,
+      "consents": 906,
+      "median_score": 207.0,
+      "control_failed": 978,
+      "consent_rate": 11.29
+    },
+    {
+      "Направление\\специальность": "Машиностроение",
+      "applications": 7896,
+      "applicants": 7435,
+      "consents": 699,
+      "median_score": 210.0,
+      "control_failed": 1121,
+      "consent_rate": 8.85
+    },
+    {
+      "Направление\\специальность": "Информационная безопасность",
+      "applications": 6434,
+      "applicants": 6128,
+      "consents": 395,
+      "median_score": 230.0,
+      "control_failed": 844,
+      "consent_rate": 6.14
+    },
+    {
+      "Направление\\специальность": "Электроэнергетика и электротехника",
+      "applications": 6235,
+      "applicants": 5960,
+      "consents": 618,
+      "median_score": 205.0,
+      "control_failed": 1374,
+      "consent_rate": 9.91
+    },
+    {
+      "Направление\\специальность": "Автоматизация технологических процессов и производств",
+      "applications": 5211,
+      "applicants": 5016,
+      "consents": 298,
+      "median_score": 223.0,
+      "control_failed": 407,
+      "consent_rate": 5.72
+    },
+    {
+      "Направление\\специальность": "Строительство",
+      "applications": 5061,
+      "applicants": 4889,
+      "consents": 226,
+      "median_score": 201.0,
+      "control_failed": 1035,
+      "consent_rate": 4.47
+    },
+    {
+      "Направление\\специальность": "Инноватика",
+      "applications": 5021,
+      "applicants": 4839,
+      "consents": 410,
+      "median_score": 227.0,
+      "control_failed": 657,
+      "consent_rate": 8.17
+    },
+    {
+      "Направление\\специальность": "Прикладная математика и информатика",
+      "applications": 4575,
+      "applicants": 4411,
+      "consents": 203,
+      "median_score": 231.0,
+      "control_failed": 479,
+      "consent_rate": 4.44
+    },
+    {
+      "Направление\\специальность": "Реклама и связи с общественностью",
+      "applications": 4006,
+      "applicants": 3883,
+      "consents": 573,
+      "median_score": 198.0,
+      "control_failed": 1617,
+      "consent_rate": 14.3
+    },
+    {
+      "Направление\\специальность": "Информационная безопасность автоматизированных систем",
+      "applications": 3289,
+      "applicants": 3207,
+      "consents": 217,
+      "median_score": 228.0,
+      "control_failed": 421,
+      "consent_rate": 6.6
+    },
+    {
+      "Направление\\специальность": "Материаловедение и технологии материалов",
+      "applications": 2965,
+      "applicants": 2887,
+      "consents": 191,
+      "median_score": 209.0,
+      "control_failed": 226,
+      "consent_rate": 6.44
+    },
+    {
+      "Направление\\специальность": "Менеджмент",
+      "applications": 2897,
+      "applicants": 2833,
+      "consents": 110,
+      "median_score": 178.0,
+      "control_failed": 1201,
+      "consent_rate": 3.8
+    },
+    {
+      "Направление\\специальность": "Конструкторско-технологическое обеспечение машиностроительных производств",
+      "applications": 2730,
+      "applicants": 2678,
+      "consents": 517,
+      "median_score": 198.0,
+      "control_failed": 554,
+      "consent_rate": 18.94
+    }
+  ],
+  "faculties": [
+    {
+      "Подразделение": "Факультет информационных технологий",
+      "applications": 73922,
+      "applicants": 44254,
+      "consents": 5403,
+      "control_failed": 9811
+    },
+    {
+      "Подразделение": "Факультет машиностроения",
+      "applications": 25240,
+      "applicants": 21030,
+      "consents": 1938,
+      "control_failed": 3334
+    },
+    {
+      "Подразделение": "Транспортный факультет",
+      "applications": 16177,
+      "applicants": 14351,
+      "consents": 1347,
+      "control_failed": 2094
+    },
+    {
+      "Подразделение": "Передовая инженерная школа технологического лидерства \"FDR\"",
+      "applications": 15264,
+      "applicants": 13620,
+      "consents": 910,
+      "control_failed": 1400
+    },
+    {
+      "Подразделение": "Факультет экономики и управления",
+      "applications": 12186,
+      "applicants": 11106,
+      "consents": 1112,
+      "control_failed": 4121
+    },
+    {
+      "Подразделение": "Факультет урбанистики и городского хозяйства",
+      "applications": 7347,
+      "applicants": 6977,
+      "consents": 386,
+      "control_failed": 1370
+    },
+    {
+      "Подразделение": "Рязанский институт (филиал) Московского политехнического университета",
+      "applications": 6167,
+      "applicants": 5875,
+      "consents": 713,
+      "control_failed": 1545
+    },
+    {
+      "Подразделение": "Чебоксарский институт (филиал) Московского политехнического университета",
+      "applications": 5726,
+      "applicants": 5509,
+      "consents": 732,
+      "control_failed": 1681
+    },
+    {
+      "Подразделение": "Полиграфический факультет",
+      "applications": 4137,
+      "applicants": 4011,
+      "consents": 405,
+      "control_failed": 518
+    },
+    {
+      "Подразделение": "Факультет химической технологии и биотехнологии",
+      "applications": 2839,
+      "applicants": 2776,
+      "consents": 212,
+      "control_failed": 556
+    },
+    {
+      "Подразделение": "Институт издательского дела и журналистики",
+      "applications": 2508,
+      "applicants": 2464,
+      "consents": 383,
+      "control_failed": 829
+    },
+    {
+      "Подразделение": "Институт графики и искусства книги имени В.А. Фаворского",
+      "applications": 1731,
+      "applicants": 1716,
+      "consents": 342,
+      "control_failed": 1059
+    },
+    {
+      "Подразделение": "Коломенский институт (филиал) Московского политехнического университета",
+      "applications": 1537,
+      "applicants": 1518,
+      "consents": 216,
+      "control_failed": 332
+    },
+    {
+      "Подразделение": "Электростальский институт (филиал) Московского политехнического университета",
+      "applications": 632,
+      "applicants": 631,
+      "consents": 38,
+      "control_failed": 217
+    },
+    {
+      "Подразделение": "Передовая школа инженерного дизайна",
+      "applications": 513,
+      "applicants": 510,
+      "consents": 102,
+      "control_failed": 347
+    },
+    {
+      "Подразделение": "Тучковский филиал Московского политехнического университета",
+      "applications": 44,
+      "applicants": 44,
+      "consents": 0,
+      "control_failed": 23
+    }
+  ]
+}

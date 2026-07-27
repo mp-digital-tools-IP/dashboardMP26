@@ -12,6 +12,24 @@ outputs/*
 !outputs/dashboard-v1/**
 !outputs/dashboard-v2/
 !outputs/dashboard-v2/**
+!outputs/dashboard-v4/
+!outputs/dashboard-v4/.openai/
+!outputs/dashboard-v4/.openai/hosting.json
+!outputs/dashboard-v4/public/
+!outputs/dashboard-v4/public/**
+!outputs/dashboard-v4/scripts/
+!outputs/dashboard-v4/scripts/**
+!outputs/dashboard-v4/src/
+!outputs/dashboard-v4/src/**
+!outputs/dashboard-v4/tests/
+!outputs/dashboard-v4/tests/**
+!outputs/dashboard-v4/worker/
+!outputs/dashboard-v4/worker/**
+!outputs/dashboard-v4/AGENTS.md
+!outputs/dashboard-v4/index.html
+!outputs/dashboard-v4/package.json
+!outputs/dashboard-v4/pnpm-lock.yaml
+!outputs/dashboard-v4/vite.config.mjs
 
 # Local personal-data exports must never be committed.
 data/raw/
