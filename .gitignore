@@ -1,8 +1,22 @@
 *
 !.gitignore
+!tools/
+!tools/**
+!docs/
+!docs/**
+**/__pycache__/
+*.py[cod]
 !outputs/
 outputs/*
 !outputs/dashboard-v1/
 !outputs/dashboard-v1/**
 !outputs/dashboard-v2/
 !outputs/dashboard-v2/**
+
+# Local personal-data exports must never be committed.
+data/raw/
+data/private/
+data/anonymized/
+*.private.*
+*_raw.*
+*_source.*
