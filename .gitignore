@@ -29,6 +29,7 @@ outputs/*
 !outputs/dashboard-v4/index.html
 !outputs/dashboard-v4/package.json
 !outputs/dashboard-v4/pnpm-lock.yaml
+!outputs/dashboard-v4/pnpm-workspace.yaml
 !outputs/dashboard-v4/vite.config.mjs
 
 # Local personal-data exports must never be committed.
