@@ -1,0 +1,467 @@
+"""Build privacy-safe aggregates for Dashboard V5.
+
+The source workbook is already anonymized, but this script still never exports
+names, phones, e-mails, personal file numbers or free-text fields.  The browser
+receives only aggregates and a small deterministic anonymous sample.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+from openpyxl import load_workbook
+
+
+FORM_LABELS = {
+    "Очная": "Очная",
+    "Очно-заочная": "Очно-заочная",
+    "Заочная": "Заочная",
+}
+FUNDING_LABELS = {
+    "Федеральный бюджет": "budget",
+    "Внебюджетные средства": "paid",
+}
+LEVEL_LABELS = {
+    "Бакалавриат": "Бакалавриат и специалитет",
+    "Специалитет": "Бакалавриат и специалитет",
+    "Магистратура": "Магистратура",
+    "Аспирантура": "Аспирантура",
+}
+OFFICIAL_TOTALS = {
+    "Бакалавриат и специалитет": {
+        "Все формы": {"budget": 2854, "paid": 5369},
+        "Очная": {"budget": 2373, "paid": 3665},
+        "Очно-заочная": {"budget": 151, "paid": 690},
+        "Заочная": {"budget": 330, "paid": 1014},
+    },
+    "Магистратура": {"Все формы": {"budget": 779, "paid": 1953}},
+    "Аспирантура": {"Все формы": {"budget": 66, "paid": 0}},
+}
+
+
+def text(value) -> str:
+    return "" if value is None else str(value).strip()
+
+
+def number(value) -> int | None:
+    try:
+        return int(float(str(value).replace(",", ".")))
+    except (TypeError, ValueError):
+        return None
+
+
+def priority(value) -> int:
+    result = number(value)
+    return result if result is not None else 999
+
+
+def normalized(value: str) -> str:
+    return re.sub(r"[^a-zа-яё0-9]+", " ", value.casefold()).strip()
+
+
+def person_key(case_value, fallback) -> str:
+    match = re.search(r"Личное дело\s+(\d+)", text(case_value))
+    return match.group(1) if match else text(fallback)
+
+
+def anonymous_id(value: str) -> str:
+    digest = hashlib.sha256(f"pk26:{value}".encode("utf-8")).hexdigest().upper()
+    return f"AB-26-{digest[:6]}"
+
+
+def application_date(case_value) -> date | None:
+    match = re.search(r"от\s+(\d{2}\.\d{2}\.\d{4})", text(case_value))
+    return datetime.strptime(match.group(1), "%d.%m.%Y").date() if match else None
+
+
+def parse_plan_cell(value: str) -> dict[str, int]:
+    value = value.replace("—", "").strip()
+    if not value:
+        return {"budget": 0, "paid": 0}
+    parts = [part.strip() for part in value.split("/")]
+    if len(parts) == 1:
+        return {"budget": number(parts[0]) or 0, "paid": 0}
+    return {"budget": number(parts[0]) or 0, "paid": number(parts[1]) or 0}
+
+
+def parse_official_programs(path: Path) -> list[dict]:
+    programs: list[dict] = []
+    current_level = ""
+    code_re = re.compile(r"^\d{2}\.\d{2}\.\d{2}(?:\.\d{2})?$")
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line == "### Специалитет":
+            current_level = "Специалитет"
+            continue
+        if line == "### Бакалавриат":
+            current_level = "Бакалавриат"
+            continue
+        if line.startswith("### ") and line not in {"### Специалитет", "### Бакалавриат"}:
+            current_level = ""
+        if not current_level or not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) < 5 or not code_re.match(cells[0]):
+            continue
+        code, name = cells[0], cells[1]
+        programs.append({
+            "code": code,
+            "groupCode": ".".join(code.split(".")[:3]),
+            "name": name,
+            "level": current_level,
+            "plans": {
+                "Очная": parse_plan_cell(cells[2]),
+                "Очно-заочная": parse_plan_cell(cells[3]),
+                "Заочная": parse_plan_cell(cells[4]),
+            },
+            "search": normalized(name),
+        })
+    return programs
+
+
+def best_program(profile: str, direction: str, level: str, official: list[dict], fallback: dict[str, str]):
+    profile_n = normalized(profile)
+    candidates = [item for item in official if item["level"] == level]
+    exact = [item for item in candidates if profile_n and (profile_n in item["search"] or item["search"] in profile_n)]
+    if exact:
+        return max(exact, key=lambda item: min(len(profile_n), len(item["search"])))
+    direction_code = fallback.get(direction)
+    if direction_code:
+        return next((item for item in candidates if item["code"] == direction_code), {
+            "code": direction_code,
+            "groupCode": ".".join(direction_code.split(".")[:3]),
+            "name": profile or direction,
+            "level": level,
+            "plans": {form: {"budget": 0, "paid": 0} for form in FORM_LABELS},
+        })
+    return {
+        "code": "—",
+        "groupCode": "—",
+        "name": profile or direction or "Не указано",
+        "level": level,
+        "plans": {form: {"budget": 0, "paid": 0} for form in FORM_LABELS},
+    }
+
+
+def new_stats():
+    return {
+        "rows": 0,
+        "people": set(),
+        "applications": set(),
+        "activePeople": set(),
+        "consentPeople": set(),
+        "activeConsentPeople": set(),
+        "budgetRows": 0,
+        "paidRows": 0,
+        "scores": [],
+    }
+
+
+def add_stats(stats, person, app_key, active, consent, basis, score):
+    stats["rows"] += 1
+    stats["people"].add(person)
+    stats["applications"].add(app_key)
+    if active:
+        stats["activePeople"].add(person)
+    if consent:
+        stats["consentPeople"].add(person)
+        if active:
+            stats["activeConsentPeople"].add(person)
+    if basis == "budget":
+        stats["budgetRows"] += 1
+    elif basis == "paid":
+        stats["paidRows"] += 1
+    if score is not None:
+        stats["scores"].append(score)
+
+
+def finish_stats(stats, high_ids):
+    values = sorted(stats["scores"])
+    median = values[len(values) // 2] if values else None
+    return {
+        "rows": stats["rows"],
+        "people": len(stats["people"]),
+        "applications": len(stats["applications"]),
+        "activePeople": len(stats["activePeople"]),
+        "consentPeople": len(stats["consentPeople"]),
+        "activeConsentPeople": len(stats["activeConsentPeople"]),
+        "budgetRows": stats["budgetRows"],
+        "paidRows": stats["paidRows"],
+        "medianScore": median,
+        "highScorers": len(stats["people"].intersection(high_ids)),
+    }
+
+
+def cumulative_series(person_dates, application_dates, paid_dates):
+    available = list(person_dates.values()) + list(application_dates.values()) + list(paid_dates.values())
+    if not available:
+        return []
+    first, last = min(available), max(available)
+    people_daily = Counter(person_dates.values())
+    apps_daily = Counter(application_dates.values())
+    paid_daily = Counter(paid_dates.values())
+    current = first
+    people = applications = paid = 0
+    output = []
+    while current <= last:
+        people += people_daily[current]
+        applications += apps_daily[current]
+        paid += paid_daily[current]
+        output.append({"date": current.strftime("%d.%m.%Y"), "people": people, "applications": applications, "paid": paid})
+        current += timedelta(days=1)
+    return output
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input", type=Path)
+    parser.add_argument("knowledge", type=Path)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--v4-actuals", type=Path)
+    args = parser.parse_args()
+
+    official = parse_official_programs(args.knowledge)
+    fallback = {}
+    if args.v4_actuals and args.v4_actuals.exists():
+        old = json.loads(args.v4_actuals.read_text(encoding="utf-8"))
+        fallback = {item["name"]: item["code"] for item in old.get("directions", []) if item.get("code") != "—"}
+
+    workbook = load_workbook(args.input, read_only=True, data_only=True)
+    sheet = workbook.active
+    iterator = sheet.iter_rows(values_only=True)
+    headers = next(iterator)
+    col = {name: index for index, name in enumerate(headers)}
+    required = [
+        "anon_applicant_id", "Личное дело", "Сумма баллов", "Согласие на зачисление", "Приоритет",
+        "Форма обучения", "Источник финансирования", "Уровень подготовки", "Направление\\специальность",
+        "Профиль", "Подразделение", "Текущий статус конкурса",
+    ]
+    missing = [name for name in required if name not in col]
+    if missing:
+        raise RuntimeError(f"Missing columns: {missing}")
+
+    all_people = set()
+    subject_scores = defaultdict(dict)
+    scope_stats = defaultdict(new_stats)
+    faculty_stats = defaultdict(new_stats)
+    program_stats = defaultdict(new_stats)
+    program_meta = {}
+    ranking = defaultdict(dict)
+    applicant_apps = defaultdict(list)
+    applicant_meta = {}
+    programs_by_person = defaultdict(set)
+    dynamics = defaultdict(lambda: {"people": {}, "applications": {}, "paid": {}})
+    match_cache = {}
+
+    for row in iterator:
+        raw_id = text(row[col["anon_applicant_id"]])
+        if not raw_id:
+            continue
+        person = person_key(row[col["Личное дело"]], raw_id)
+        all_people.add(person)
+        level_raw = text(row[col["Уровень подготовки"]])
+        level_group = LEVEL_LABELS.get(level_raw)
+        if not level_group:
+            continue
+        form = FORM_LABELS.get(text(row[col["Форма обучения"]]), text(row[col["Форма обучения"]]) or "Не указано")
+        basis = FUNDING_LABELS.get(text(row[col["Источник финансирования"]]), "other")
+        direction = text(row[col["Направление\\специальность"]])
+        profile = text(row[col["Профиль"]])
+        faculty = text(row[col["Подразделение"]]) or "Не указано"
+        if "рязан" in faculty.casefold():
+            continue
+        cache_key = (profile, direction, level_raw)
+        if cache_key not in match_cache:
+            match_cache[cache_key] = best_program(profile, direction, level_raw, official, fallback)
+        program = match_cache[cache_key]
+        code = program["code"]
+        program_id = f"{level_group}|{code}|{program['name']}"
+        program_meta[program_id] = {**program, "id": program_id, "levelGroup": level_group, "faculty": faculty}
+        active = text(row[col["Текущий статус конкурса"]]) == "Участвует в конкурсе"
+        consent = text(row[col["Согласие на зачисление"]]).casefold() == "да"
+        score = number(row[col["Сумма баллов"]])
+        row_date = application_date(row[col["Личное дело"]])
+        app_key = (person, program_id)
+
+        for form_key in {form, "Все формы"}:
+            for basis_key in {basis, "all"}:
+                add_stats(scope_stats[(level_group, form_key, basis_key)], person, app_key, active, consent, basis, score)
+                add_stats(faculty_stats[(level_group, form_key, basis_key, faculty)], person, app_key, active, consent, basis, score)
+                add_stats(program_stats[(program_id, form_key, basis_key)], person, app_key, active, consent, basis, score)
+
+        if row_date:
+            for form_key in {form, "Все формы"}:
+                for dynamic_key in [
+                    f"scope:{level_group}:{form_key}",
+                    f"faculty:{level_group}:{form_key}:{faculty}",
+                    f"program:{form_key}:{program_id}",
+                ]:
+                    bucket = dynamics[dynamic_key]
+                    old_person = bucket["people"].get(person)
+                    if old_person is None or row_date < old_person:
+                        bucket["people"][person] = row_date
+                    old_app = bucket["applications"].get(app_key)
+                    if old_app is None or row_date < old_app:
+                        bucket["applications"][app_key] = row_date
+                    if basis == "paid":
+                        old_paid = bucket["paid"].get(app_key)
+                        if old_paid is None or row_date < old_paid:
+                            bucket["paid"][app_key] = row_date
+
+        for index in range(1, 11):
+            discipline = text(row[col.get(f"Дисциплина{index}", -1)]) if f"Дисциплина{index}" in col else ""
+            subject = number(row[col.get(f"Предмет{index}", -1)]) if f"Предмет{index}" in col else None
+            if discipline and subject is not None:
+                subject_scores[person][discipline] = max(subject, subject_scores[person].get(discipline, 0))
+
+        rank_key = (person, form, basis)
+        existing = ranking[program_id].get(rank_key)
+        candidate = {
+            "id": anonymous_id(person), "score": score or 0, "priority": priority(row[col["Приоритет"]]),
+            "consent": consent, "active": active, "status": text(row[col["Текущий статус конкурса"]]) or "Не указан",
+            "form": form, "basis": basis,
+        }
+        if existing is None or (candidate["priority"], -candidate["score"]) < (existing["priority"], -existing["score"]):
+            ranking[program_id][rank_key] = candidate
+        programs_by_person[person].add(program_id)
+        if len(applicant_apps[person]) < 12 and all(item["programId"] != program_id for item in applicant_apps[person]):
+            applicant_apps[person].append({
+                "programId": program_id, "code": code, "name": program["name"], "faculty": faculty,
+                "score": score or 0, "priority": candidate["priority"], "consent": consent,
+                "status": candidate["status"], "form": form, "basis": basis,
+            })
+        meta = applicant_meta.setdefault(person, {"id": anonymous_id(person), "maxScore": 0, "faculties": set(), "active": False, "consent": False})
+        meta["maxScore"] = max(meta["maxScore"], score or 0)
+        meta["faculties"].add(faculty)
+        meta["active"] = meta["active"] or active
+        meta["consent"] = meta["consent"] or consent
+
+    def subject_value(values, tokens):
+        matches = [score for name, score in values.items() if any(token in name.casefold() for token in tokens)]
+        return max(matches) if matches else None
+
+    high_ids = set()
+    for person, values in subject_scores.items():
+        math = subject_value(values, ["математ"])
+        physics = subject_value(values, ["физик"])
+        informatics = subject_value(values, ["информат"])
+        if math is not None and math >= 85 and ((physics is not None and physics >= 85) or (informatics is not None and informatics >= 85)):
+            high_ids.add(person)
+
+    scope_output = {}
+    for key, stats in scope_stats.items():
+        level_group, form, basis = key
+        result = finish_stats(stats, high_ids)
+        total = OFFICIAL_TOTALS.get(level_group, {}).get(form) or OFFICIAL_TOTALS.get(level_group, {}).get("Все формы", {"budget": 0, "paid": 0})
+        result["planBudget"] = total["budget"] if basis in {"all", "budget"} else 0
+        result["planPaid"] = total["paid"] if basis in {"all", "paid"} else 0
+        scope_output["|".join(key)] = result
+
+    faculties_output = []
+    faculty_pairs = sorted({(key[0], key[3]) for key in faculty_stats})
+    for level_group, faculty in faculty_pairs:
+        base = finish_stats(faculty_stats[(level_group, "Все формы", "all", faculty)], high_ids)
+        slices = {}
+        for form in ["Все формы", *FORM_LABELS]:
+            for basis in ["all", "budget", "paid"]:
+                stats = faculty_stats.get((level_group, form, basis, faculty))
+                if stats:
+                    slices[f"{form}|{basis}"] = finish_stats(stats, high_ids)
+        base.update({"name": faculty, "level": level_group, "slices": slices})
+        faculties_output.append(base)
+    faculties_output.sort(key=lambda item: (item["level"], -item["applications"]))
+
+    programs_output = []
+    ranking_output = {}
+    for program_id, meta in program_meta.items():
+        stats = program_stats[(program_id, "Все формы", "all")]
+        result = finish_stats(stats, high_ids)
+        plan_budget = sum(item["budget"] for item in meta["plans"].values())
+        plan_paid = sum(item["paid"] for item in meta["plans"].values())
+        budget_candidates = [item for item in ranking[program_id].values() if item["basis"] == "budget" and item["active"] and item["consent"] and item["score"] > 0]
+        budget_candidates.sort(key=lambda item: (-item["score"], item["priority"], item["id"]))
+        top = budget_candidates[:plan_budget] if plan_budget else []
+        top_ids = {item["id"] for item in top}
+        result.update({
+            "id": program_id, "code": meta["code"], "groupCode": meta["groupCode"], "name": meta["name"],
+            "faculty": meta["faculty"], "level": meta["levelGroup"], "plans": meta["plans"],
+            "planBudget": plan_budget, "planPaid": plan_paid, "budgetFilled": min(plan_budget, len(budget_candidates)),
+            "budgetFillRate": round(min(plan_budget, len(budget_candidates)) / plan_budget * 100, 1) if plan_budget else None,
+            "topAverageScore": round(sum(item["score"] for item in top) / len(top), 1) if top else None,
+            "topBoundaryScore": top[-1]["score"] if top else None,
+            "slices": {
+                f"{form}|{basis}": finish_stats(program_stats[(program_id, form, basis)], high_ids)
+                for form in ["Все формы", *FORM_LABELS]
+                for basis in ["all", "budget", "paid"]
+                if (program_id, form, basis) in program_stats
+            },
+        })
+        programs_output.append(result)
+        rows = sorted(ranking[program_id].values(), key=lambda item: (-item["score"], item["priority"], item["id"]))[:80]
+        for place, item in enumerate(rows, 1):
+            item["place"] = place
+            item["topList"] = item["id"] in top_ids
+        ranking_output[program_id] = rows
+    programs_output.sort(key=lambda item: (-item["applications"], item["code"]))
+
+    intersections = Counter()
+    for person_programs in programs_by_person.values():
+        values = sorted(person_programs)
+        if len(values) > 12:
+            values = values[:12]
+        for index, left in enumerate(values):
+            for right in values[index + 1:]:
+                intersections[(left, right)] += 1
+    intersection_output = [{"a": a, "b": b, "count": count} for (a, b), count in intersections.most_common(80)]
+
+    applicant_candidates = sorted(applicant_meta.items(), key=lambda item: (-item[1]["maxScore"], item[1]["id"]))[:120]
+    applicants_output = []
+    for person, meta in applicant_candidates:
+        apps = sorted(applicant_apps[person], key=lambda item: (item["priority"], -item["score"]))
+        segment = "Высокобалльник 85+" if person in high_ids else "Согласие получено" if meta["consent"] else "Активен в конкурсе" if meta["active"] else "Требует внимания"
+        applicants_output.append({
+            "id": meta["id"], "score": meta["maxScore"], "faculties": sorted(meta["faculties"]),
+            "segment": segment, "applications": apps,
+        })
+
+    dynamics_output = {
+        key: cumulative_series(bucket["people"], bucket["applications"], bucket["paid"])
+        for key, bucket in dynamics.items()
+    }
+
+    result = {
+        "source": {"file": args.input.name, "rows": sheet.max_row - 1, "updated": "27.07.2026", "ryazanExcluded": True},
+        "officialTotals": OFFICIAL_TOTALS,
+        "allExport": {"rows": sheet.max_row - 1, "people": len(all_people)},
+        "definitions": {
+            "people": "Уникальные номера личных дел",
+            "applications": "Уникальная пара «человек × образовательная программа»",
+            "highScorer": "Математика 85+ и физика либо информатика 85+",
+            "topList": "Активные согласия на бюджет, ранжированные по конкурсному баллу в пределах плана программы",
+            "model2025": "Визуализационная модель: основной поток 90→94% от 2026, платный поток 88→93%",
+        },
+        "scopes": scope_output,
+        "faculties": faculties_output,
+        "programs": programs_output,
+        "dynamics": dynamics_output,
+        "rankings": ranking_output,
+        "applicants": applicants_output,
+        "intersections": intersection_output,
+    }
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({
+        "rows": result["allExport"]["rows"], "people": result["allExport"]["people"],
+        "programs": len(programs_output), "faculties": len({item["name"] for item in faculties_output}),
+        "rankingGroups": len(ranking_output), "applicantSample": len(applicants_output),
+    }, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

@@ -32,6 +32,28 @@ outputs/*
 !outputs/dashboard-v4/pnpm-workspace.yaml
 !outputs/dashboard-v4/vite.config.mjs
 
+!outputs/dashboard-v5/
+!outputs/dashboard-v5/.openai/
+!outputs/dashboard-v5/.openai/hosting.json
+!outputs/dashboard-v5/audit/
+!outputs/dashboard-v5/audit/**
+!outputs/dashboard-v5/public/
+!outputs/dashboard-v5/public/**
+!outputs/dashboard-v5/scripts/
+!outputs/dashboard-v5/scripts/**
+!outputs/dashboard-v5/src/
+!outputs/dashboard-v5/src/**
+!outputs/dashboard-v5/tests/
+!outputs/dashboard-v5/tests/**
+!outputs/dashboard-v5/worker/
+!outputs/dashboard-v5/worker/**
+!outputs/dashboard-v5/AGENTS.md
+!outputs/dashboard-v5/index.html
+!outputs/dashboard-v5/package.json
+!outputs/dashboard-v5/pnpm-lock.yaml
+!outputs/dashboard-v5/pnpm-workspace.yaml
+!outputs/dashboard-v5/vite.config.mjs
+
 # Local personal-data exports must never be committed.
 data/raw/
 data/private/

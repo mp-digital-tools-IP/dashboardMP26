@@ -7,6 +7,7 @@ on:
       - "outputs/dashboard-v1/**"
       - "outputs/dashboard-v2/**"
       - "outputs/dashboard-v4/**"
+      - "outputs/dashboard-v5/**"
       - "outputs/index.html"
       - "docs/**"
       - "tools/**"
@@ -51,6 +52,14 @@ jobs:
         working-directory: ./outputs/dashboard-v4
         run: pnpm run build
 
+      - name: Install dashboard v5 dependencies
+        working-directory: ./outputs/dashboard-v5
+        run: pnpm install --frozen-lockfile
+
+      - name: Build dashboard v5
+        working-directory: ./outputs/dashboard-v5
+        run: pnpm run build
+
       - name: Prepare Pages artifact
         run: |
           mkdir -p pages-site
@@ -58,6 +67,7 @@ jobs:
           cp -R outputs/dashboard-v1 pages-site/dashboard-v1
           cp -R outputs/dashboard-v2 pages-site/dashboard-v2
           cp -R outputs/dashboard-v4/dist/client pages-site/dashboard-v4
+          cp -R outputs/dashboard-v5/dist/client pages-site/dashboard-v5
 
       - name: Upload dashboard
         uses: actions/upload-pages-artifact@v3
