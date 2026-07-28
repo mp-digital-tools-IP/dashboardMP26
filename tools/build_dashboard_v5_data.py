@@ -44,6 +44,8 @@ OFFICIAL_TOTALS = {
     "Аспирантура": {"Все формы": {"budget": 66, "paid": 0}},
 }
 
+EXCLUDED_FACULTY_TOKENS = ("филиал",)
+
 
 def text(value) -> str:
     return "" if value is None else str(value).strip()
@@ -158,6 +160,7 @@ def new_stats():
         "consentPeople": set(),
         "activeConsentPeople": set(),
         "potentialBudgetPeople": set(),
+        "potentialPaidPeople": set(),
         "budgetRows": 0,
         "paidRows": 0,
         "scores": [],
@@ -176,6 +179,8 @@ def add_stats(stats, person, app_key, active, consent, basis, score, priority_va
             stats["activeConsentPeople"].add(person)
     if basis == "budget" and active and priority_value <= 2:
         stats["potentialBudgetPeople"].add(person)
+    if basis == "paid" and active and priority_value <= 2:
+        stats["potentialPaidPeople"].add(person)
     if basis == "budget":
         stats["budgetRows"] += 1
     elif basis == "paid":
@@ -195,10 +200,13 @@ def finish_stats(stats, high_ids):
         "consentPeople": len(stats["consentPeople"]),
         "activeConsentPeople": len(stats["activeConsentPeople"]),
         "potentialBudgetPeople": len(stats["potentialBudgetPeople"]),
+        "potentialPaidPeople": len(stats["potentialPaidPeople"]),
         "budgetRows": stats["budgetRows"],
         "paidRows": stats["paidRows"],
         "medianScore": median,
         "highScorers": len(stats["people"].intersection(high_ids)),
+        "highScorerConsents": len(stats["consentPeople"].intersection(high_ids)),
+        "activeHighScorerConsents": len(stats["activeConsentPeople"].intersection(high_ids)),
     }
 
 
@@ -220,6 +228,54 @@ def cumulative_series(person_dates, application_dates, paid_dates):
         output.append({"date": current.strftime("%d.%m.%Y"), "people": people, "applications": applications, "paid": paid})
         current += timedelta(days=1)
     return output
+
+
+def modeled_touchpoints(person: str, apps: list[dict], has_consent: bool) -> list[dict]:
+    """Create a deterministic, explicitly modeled CRM/event journey for the demo."""
+    digest = hashlib.sha256(f"touches:{person}".encode("utf-8")).digest()
+    app_dates = []
+    for item in apps:
+        if item.get("date"):
+            try:
+                app_dates.append(datetime.strptime(item["date"], "%d.%m.%Y").date())
+            except ValueError:
+                pass
+    anchor = min(app_dates) if app_dates else date(2026, 7, 1)
+    count = (3 if has_consent else 1) + digest[0] % 3
+    event_names = [
+        "День открытых дверей",
+        "Профориентационное мероприятие",
+        "Выставка «Образование и карьера»",
+        "Консультация по поступлению",
+    ]
+    call_results = [
+        "Дозвонились · интерес подтверждён",
+        "Обсудили приоритеты и конкурс",
+        "Запрошена консультация по программе",
+        "Направлена памятка о следующем шаге",
+    ]
+    touches = []
+    for index in range(count):
+        offset = 54 - index * 11 - digest[index + 1] % 7
+        touch_date = anchor - timedelta(days=max(2, offset))
+        if index % 2 == 0:
+            event_name = event_names[digest[index + 4] % len(event_names)]
+            touches.append({
+                "type": "Участие в мероприятии",
+                "source": "Модель CRM",
+                "date": touch_date.strftime("%d.%m.%Y"),
+                "result": event_name,
+                "modeled": True,
+            })
+        else:
+            touches.append({
+                "type": "Звонок",
+                "source": "Модель CRM",
+                "date": touch_date.strftime("%d.%m.%Y"),
+                "result": call_results[digest[index + 4] % len(call_results)],
+                "modeled": True,
+            })
+    return sorted(touches, key=lambda item: datetime.strptime(item["date"], "%d.%m.%Y"))
 
 
 def main() -> None:
@@ -268,7 +324,6 @@ def main() -> None:
         if not raw_id:
             continue
         person = person_key(row[col["Личное дело"]], raw_id)
-        all_people.add(person)
         level_raw = text(row[col["Уровень подготовки"]])
         level_group = LEVEL_LABELS.get(level_raw)
         if not level_group:
@@ -278,8 +333,9 @@ def main() -> None:
         direction = text(row[col["Направление\\специальность"]])
         profile = text(row[col["Профиль"]])
         faculty = text(row[col["Подразделение"]]) or "Не указано"
-        if "рязан" in faculty.casefold():
+        if any(token in faculty.casefold() for token in EXCLUDED_FACULTY_TOKENS):
             continue
+        all_people.add(person)
         cache_key = (profile, direction, level_raw)
         if cache_key not in match_cache:
             match_cache[cache_key] = best_program(profile, direction, level_raw, official, fallback)
@@ -335,12 +391,27 @@ def main() -> None:
         if existing is None or (candidate["priority"], -candidate["score"]) < (existing["priority"], -existing["score"]):
             ranking[program_id][rank_key] = candidate
         programs_by_person[person].add(program_id)
-        if len(applicant_apps[person]) < 12 and all(item["programId"] != program_id for item in applicant_apps[person]):
+        existing_app = next((
+            item for item in applicant_apps[person]
+            if item["programId"] == program_id and item["form"] == form and item["basis"] == basis
+        ), None)
+        if existing_app is None and len(applicant_apps[person]) < 12:
             applicant_apps[person].append({
                 "programId": program_id, "code": code, "name": program["name"], "faculty": faculty,
-                "score": score or 0, "priority": candidate["priority"], "consent": consent,
+                "score": score or 0, "priority": candidate["priority"], "consent": consent, "active": active,
                 "status": candidate["status"], "form": form, "basis": basis,
+                "date": row_date.strftime("%d.%m.%Y") if row_date else None,
             })
+        elif existing_app is not None:
+            existing_app["score"] = max(existing_app["score"], score or 0)
+            existing_app["priority"] = min(existing_app["priority"], candidate["priority"])
+            existing_app["consent"] = existing_app["consent"] or consent
+            was_active = existing_app["active"]
+            existing_app["active"] = existing_app["active"] or active
+            if consent or (active and not was_active):
+                existing_app["status"] = candidate["status"]
+            if not existing_app["date"] and row_date:
+                existing_app["date"] = row_date.strftime("%d.%m.%Y")
         meta = applicant_meta.setdefault(person, {"id": anonymous_id(person), "maxScore": 0, "faculties": set(), "active": False, "consent": False, "priorityReady": False})
         meta["maxScore"] = max(meta["maxScore"], score or 0)
         meta["faculties"].add(faculty)
@@ -359,6 +430,16 @@ def main() -> None:
         informatics = subject_value(values, ["информат"])
         if math is not None and math >= 85 and ((physics is not None and physics >= 85) or (informatics is not None and informatics >= 85)):
             high_ids.add(person)
+
+    best_budget_consent = {}
+    for program_id, candidates in ranking.items():
+        for (person, _form, basis), item in candidates.items():
+            if basis != "budget" or not item["active"] or not item["consent"]:
+                continue
+            choice = (item["priority"], -item["score"], program_id)
+            if person not in best_budget_consent or choice < best_budget_consent[person]:
+                best_budget_consent[person] = choice
+    budget_filled_by_program = Counter(choice[2] for choice in best_budget_consent.values())
 
     scope_output = {}
     for key, stats in scope_stats.items():
@@ -405,9 +486,10 @@ def main() -> None:
             "projectedTopRate": round(min(plan_budget, len(potential_candidates)) / plan_budget * 100, 1) if plan_budget else None,
             "projectedAverageScore": round(sum(item["score"] for item in projected_top) / len(projected_top), 1) if projected_top else None,
             "projectedBoundaryScore": projected_top[-1]["score"] if projected_top else None,
-            "budgetFilled": 0, "budgetFillRate": 0,
-            "topAverageScore": None,
-            "topBoundaryScore": None,
+            "budgetFilled": min(plan_budget, budget_filled_by_program[program_id]) if plan_budget else 0,
+            "budgetFillRate": round(min(plan_budget, budget_filled_by_program[program_id]) / plan_budget * 100, 1) if plan_budget else None,
+            "topAverageScore": round(sum(item["score"] for item in projected_top if item["consent"]) / len([item for item in projected_top if item["consent"]]), 1) if any(item["consent"] for item in projected_top) else None,
+            "topBoundaryScore": next((item["score"] for item in reversed(projected_top) if item["consent"]), None),
             "slices": {
                 f"{form}|{basis}": finish_stats(program_stats[(program_id, form, basis)], high_ids)
                 for form in ["Все формы", *FORM_LABELS]
@@ -433,14 +515,65 @@ def main() -> None:
                 intersections[(left, right)] += 1
     intersection_output = [{"a": a, "b": b, "count": count} for (a, b), count in intersections.most_common(80)]
 
-    applicant_candidates = sorted(applicant_meta.items(), key=lambda item: (-item[1]["maxScore"], item[1]["id"]))[:120]
+    ranked_applicants = sorted(
+        applicant_meta.items(),
+        key=lambda item: (-int(item[1]["consent"]), -int(item[0] in high_ids), -int(item[1]["priorityReady"]), -item[1]["maxScore"], item[1]["id"]),
+    )
+    def balanced_sample(candidates, limit):
+        by_faculty = defaultdict(list)
+        for person, meta in candidates:
+            for faculty in sorted(meta["faculties"]):
+                by_faculty[faculty].append((person, meta))
+        selected = []
+        selected_people = set()
+        faculty_names = sorted(by_faculty)
+        while len(selected) < limit:
+            added = False
+            for faculty in faculty_names:
+                while by_faculty[faculty] and by_faculty[faculty][0][0] in selected_people:
+                    by_faculty[faculty].pop(0)
+                if by_faculty[faculty]:
+                    person, meta = by_faculty[faculty].pop(0)
+                    selected_people.add(person)
+                    selected.append((person, meta))
+                    added = True
+                    if len(selected) >= limit:
+                        break
+            if not added:
+                break
+        if len(selected) < limit:
+            selected.extend((person, meta) for person, meta in candidates if person not in selected_people)
+        return selected[:limit]
+
+    with_consent = [item for item in ranked_applicants if item[1]["consent"]]
+    without_consent = [item for item in ranked_applicants if not item[1]["consent"]]
+    applicant_candidates = balanced_sample(with_consent, 120) + balanced_sample(without_consent, 120)
     applicants_output = []
     for person, meta in applicant_candidates:
         apps = sorted(applicant_apps[person], key=lambda item: (item["priority"], -item["score"]))
         segment = "Высокобалльник 85+" if person in high_ids else "Приоритет 1–2" if meta["priorityReady"] else "Активен в конкурсе" if meta["active"] else "Требует внимания"
+        exams = [{"name": name, "score": score} for name, score in sorted(subject_scores[person].items(), key=lambda item: (-item[1], item[0]))]
+        raw_consent_apps = [item for item in apps if item["consent"]]
+        consent_app = min(
+            raw_consent_apps,
+            key=lambda item: (not item["active"], item["priority"], item["basis"] != "budget", -item["score"], item["programId"]),
+            default=None,
+        )
+        for item in apps:
+            item["consent"] = item is consent_app
+        consent_programs = [{
+            "programId": consent_app["programId"], "code": consent_app["code"], "name": consent_app["name"],
+            "faculty": consent_app["faculty"], "form": consent_app["form"], "basis": consent_app["basis"],
+            "active": consent_app["active"],
+        }] if consent_app else []
+        touchpoints = modeled_touchpoints(person, apps, bool(consent_programs))
         applicants_output.append({
             "id": meta["id"], "score": meta["maxScore"], "faculties": sorted(meta["faculties"]),
-            "segment": segment, "applications": apps,
+            "segment": segment, "applications": apps, "consent": bool(consent_programs),
+            "consentPrograms": consent_programs,
+            "exams": exams, "examTotal": sum(item["score"] for item in exams),
+            "touchpoints": touchpoints, "touchCount": len(touchpoints),
+            "touchStatus": "Модель демонстрационной траектории; не связана с фактической CRM",
         })
 
     dynamics_output = {
@@ -449,7 +582,7 @@ def main() -> None:
     }
 
     result = {
-        "source": {"file": args.input.name, "rows": sheet.max_row - 1, "updated": "27.07.2026", "ryazanExcluded": True},
+        "source": {"file": args.input.name, "rows": sheet.max_row - 1, "updated": "27.07.2026", "branchesExcluded": True, "excludedScope": "Все институты и филиалы вне московской площадки"},
         "officialTotals": OFFICIAL_TOTALS,
         "allExport": {"rows": sheet.max_row - 1, "people": len(all_people)},
         "definitions": {
@@ -457,7 +590,7 @@ def main() -> None:
             "applications": "Уникальная пара «человек × образовательная программа»",
             "highScorer": "Математика 85+ и физика либо информатика 85+",
             "potentialBudget": "Люди с активным бюджетным заявлением и приоритетом 1–2; это сигнал намерения, а не согласие на зачисление",
-            "topList": "Расчётный верхний диапазон по активным бюджетным заявлениям с приоритетом 1–2; согласия на зачисление ещё не поступали",
+            "topList": "Расчётный верхний диапазон по активным бюджетным заявлениям с приоритетом 1–2; согласие показывается отдельным фактическим признаком",
             "model2025": "Визуализационная модель: основной поток 90→94% от 2026, платный поток 88→93%",
         },
         "scopes": scope_output,
