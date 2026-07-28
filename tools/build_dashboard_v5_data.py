@@ -157,13 +157,14 @@ def new_stats():
         "activePeople": set(),
         "consentPeople": set(),
         "activeConsentPeople": set(),
+        "potentialBudgetPeople": set(),
         "budgetRows": 0,
         "paidRows": 0,
         "scores": [],
     }
 
 
-def add_stats(stats, person, app_key, active, consent, basis, score):
+def add_stats(stats, person, app_key, active, consent, basis, score, priority_value):
     stats["rows"] += 1
     stats["people"].add(person)
     stats["applications"].add(app_key)
@@ -173,6 +174,8 @@ def add_stats(stats, person, app_key, active, consent, basis, score):
         stats["consentPeople"].add(person)
         if active:
             stats["activeConsentPeople"].add(person)
+    if basis == "budget" and active and priority_value <= 2:
+        stats["potentialBudgetPeople"].add(person)
     if basis == "budget":
         stats["budgetRows"] += 1
     elif basis == "paid":
@@ -191,6 +194,7 @@ def finish_stats(stats, high_ids):
         "activePeople": len(stats["activePeople"]),
         "consentPeople": len(stats["consentPeople"]),
         "activeConsentPeople": len(stats["activeConsentPeople"]),
+        "potentialBudgetPeople": len(stats["potentialBudgetPeople"]),
         "budgetRows": stats["budgetRows"],
         "paidRows": stats["paidRows"],
         "medianScore": median,
@@ -285,15 +289,16 @@ def main() -> None:
         program_meta[program_id] = {**program, "id": program_id, "levelGroup": level_group, "faculty": faculty}
         active = text(row[col["Текущий статус конкурса"]]) == "Участвует в конкурсе"
         consent = text(row[col["Согласие на зачисление"]]).casefold() == "да"
+        priority_value = priority(row[col["Приоритет"]])
         score = number(row[col["Сумма баллов"]])
         row_date = application_date(row[col["Личное дело"]])
         app_key = (person, program_id)
 
         for form_key in {form, "Все формы"}:
             for basis_key in {basis, "all"}:
-                add_stats(scope_stats[(level_group, form_key, basis_key)], person, app_key, active, consent, basis, score)
-                add_stats(faculty_stats[(level_group, form_key, basis_key, faculty)], person, app_key, active, consent, basis, score)
-                add_stats(program_stats[(program_id, form_key, basis_key)], person, app_key, active, consent, basis, score)
+                add_stats(scope_stats[(level_group, form_key, basis_key)], person, app_key, active, consent, basis, score, priority_value)
+                add_stats(faculty_stats[(level_group, form_key, basis_key, faculty)], person, app_key, active, consent, basis, score, priority_value)
+                add_stats(program_stats[(program_id, form_key, basis_key)], person, app_key, active, consent, basis, score, priority_value)
 
         if row_date:
             for form_key in {form, "Все формы"}:
@@ -323,7 +328,7 @@ def main() -> None:
         rank_key = (person, form, basis)
         existing = ranking[program_id].get(rank_key)
         candidate = {
-            "id": anonymous_id(person), "score": score or 0, "priority": priority(row[col["Приоритет"]]),
+            "id": anonymous_id(person), "score": score or 0, "priority": priority_value,
             "consent": consent, "active": active, "status": text(row[col["Текущий статус конкурса"]]) or "Не указан",
             "form": form, "basis": basis,
         }
@@ -336,11 +341,12 @@ def main() -> None:
                 "score": score or 0, "priority": candidate["priority"], "consent": consent,
                 "status": candidate["status"], "form": form, "basis": basis,
             })
-        meta = applicant_meta.setdefault(person, {"id": anonymous_id(person), "maxScore": 0, "faculties": set(), "active": False, "consent": False})
+        meta = applicant_meta.setdefault(person, {"id": anonymous_id(person), "maxScore": 0, "faculties": set(), "active": False, "consent": False, "priorityReady": False})
         meta["maxScore"] = max(meta["maxScore"], score or 0)
         meta["faculties"].add(faculty)
         meta["active"] = meta["active"] or active
         meta["consent"] = meta["consent"] or consent
+        meta["priorityReady"] = meta["priorityReady"] or (basis == "budget" and active and priority_value <= 2)
 
     def subject_value(values, tokens):
         matches = [score for name, score in values.items() if any(token in name.casefold() for token in tokens)]
@@ -384,17 +390,24 @@ def main() -> None:
         result = finish_stats(stats, high_ids)
         plan_budget = sum(item["budget"] for item in meta["plans"].values())
         plan_paid = sum(item["paid"] for item in meta["plans"].values())
-        budget_candidates = [item for item in ranking[program_id].values() if item["basis"] == "budget" and item["active"] and item["consent"] and item["score"] > 0]
-        budget_candidates.sort(key=lambda item: (-item["score"], item["priority"], item["id"]))
-        top = budget_candidates[:plan_budget] if plan_budget else []
-        top_ids = {item["id"] for item in top}
+        potential_candidates = [
+            item for item in ranking[program_id].values()
+            if item["basis"] == "budget" and item["active"] and item["priority"] <= 2 and item["score"] > 0
+        ]
+        potential_candidates.sort(key=lambda item: (-item["score"], item["priority"], item["id"]))
+        projected_top = potential_candidates[:plan_budget] if plan_budget else []
+        top_ids = {item["id"] for item in projected_top}
         result.update({
             "id": program_id, "code": meta["code"], "groupCode": meta["groupCode"], "name": meta["name"],
             "faculty": meta["faculty"], "level": meta["levelGroup"], "plans": meta["plans"],
-            "planBudget": plan_budget, "planPaid": plan_paid, "budgetFilled": min(plan_budget, len(budget_candidates)),
-            "budgetFillRate": round(min(plan_budget, len(budget_candidates)) / plan_budget * 100, 1) if plan_budget else None,
-            "topAverageScore": round(sum(item["score"] for item in top) / len(top), 1) if top else None,
-            "topBoundaryScore": top[-1]["score"] if top else None,
+            "planBudget": plan_budget, "planPaid": plan_paid,
+            "projectedTopCount": min(plan_budget, len(potential_candidates)),
+            "projectedTopRate": round(min(plan_budget, len(potential_candidates)) / plan_budget * 100, 1) if plan_budget else None,
+            "projectedAverageScore": round(sum(item["score"] for item in projected_top) / len(projected_top), 1) if projected_top else None,
+            "projectedBoundaryScore": projected_top[-1]["score"] if projected_top else None,
+            "budgetFilled": 0, "budgetFillRate": 0,
+            "topAverageScore": None,
+            "topBoundaryScore": None,
             "slices": {
                 f"{form}|{basis}": finish_stats(program_stats[(program_id, form, basis)], high_ids)
                 for form in ["Все формы", *FORM_LABELS]
@@ -424,7 +437,7 @@ def main() -> None:
     applicants_output = []
     for person, meta in applicant_candidates:
         apps = sorted(applicant_apps[person], key=lambda item: (item["priority"], -item["score"]))
-        segment = "Высокобалльник 85+" if person in high_ids else "Согласие получено" if meta["consent"] else "Активен в конкурсе" if meta["active"] else "Требует внимания"
+        segment = "Высокобалльник 85+" if person in high_ids else "Приоритет 1–2" if meta["priorityReady"] else "Активен в конкурсе" if meta["active"] else "Требует внимания"
         applicants_output.append({
             "id": meta["id"], "score": meta["maxScore"], "faculties": sorted(meta["faculties"]),
             "segment": segment, "applications": apps,
@@ -443,7 +456,8 @@ def main() -> None:
             "people": "Уникальные номера личных дел",
             "applications": "Уникальная пара «человек × образовательная программа»",
             "highScorer": "Математика 85+ и физика либо информатика 85+",
-            "topList": "Активные согласия на бюджет, ранжированные по конкурсному баллу в пределах плана программы",
+            "potentialBudget": "Люди с активным бюджетным заявлением и приоритетом 1–2; это сигнал намерения, а не согласие на зачисление",
+            "topList": "Расчётный верхний диапазон по активным бюджетным заявлениям с приоритетом 1–2; согласия на зачисление ещё не поступали",
             "model2025": "Визуализационная модель: основной поток 90→94% от 2026, платный поток 88→93%",
         },
         "scopes": scope_output,

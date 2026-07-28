@@ -19,6 +19,10 @@ await page.locator(".metrics-seven").waitFor();
 
 check("Заголовок кампании", (await page.locator("header.topbar p").textContent()).includes("2026"));
 check("Семь верхних KPI", await page.locator(".metrics-seven .metric").count() === 7, await page.locator(".metrics-seven .metric").count());
+check("Согласия явно равны нулю", await page.locator(".metric").filter({ hasText: "Согласия, факт" }).getByText("0", { exact: true }).count() === 1);
+check("Этап согласий обозначен как не начавшийся", (await page.locator(".consent-stage").first().innerText()).includes("ещё не начался"));
+check("Управленческая таблица показывает факультеты", await page.locator(".situation-row:not(.situation-head)").count() >= 10, await page.locator(".situation-row:not(.situation-head)").count());
+check("В таблице есть риск и управленческие действия", await page.locator(".situation-row:not(.situation-head) .badge").count() >= 10 && await page.locator(".situation-action").count() >= 10);
 check("Сравнение 2025 подписано как модель", await page.getByText("Модель 2025", { exact: false }).count() >= 2);
 check("Нет горизонтальной прокрутки страницы 1440", await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, width: innerWidth })));
 const desktopFonts = await page.evaluate(() => {
@@ -75,6 +79,8 @@ await phone.locator(".metrics-seven").waitFor();
 check("Нет горизонтальной прокрутки всей страницы 390", await phone.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), await phone.evaluate(() => ({ scroll: document.documentElement.scrollWidth, width: innerWidth })));
 const kpiScroll = await phone.locator(".metrics-seven").evaluate((element) => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, cards: element.querySelectorAll(".metric").length }));
 check("KPI перелистываются горизонтально", kpiScroll.cards === 7 && kpiScroll.scrollWidth > kpiScroll.clientWidth, kpiScroll);
+const situationBounds = await phone.locator(".situation-row:not(.situation-head)").first().evaluate((element) => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; });
+check("Карточка бюджетного набора помещается на мобильном", situationBounds.left >= 0 && situationBounds.right <= 390, situationBounds);
 check("Бургер-меню имеет крупную кнопку", await phone.locator(".menu-toggle").evaluate((element) => { const r = element.getBoundingClientRect(); return r.width >= 44 && r.height >= 44; }));
 await phone.screenshot({ path: path.join(auditDir, "mobile-390-overview.png"), fullPage: true });
 await phone.locator(".menu-toggle").click();

@@ -34,13 +34,13 @@ const fmt = (value) => new Intl.NumberFormat("ru-RU").format(Number(value || 0))
 const pct = (value) => `${Number(value || 0).toFixed(1).replace(".", ",")}%`;
 const basisNames = { all: "Бюджет и платное", budget: "Бюджет", paid: "Платное" };
 const initialTasks = [
-  { id: "TASK-501", title: "Проверить программы с незаполненным верхним списком", owner: "Аналитическая группа", priority: "high", status: "todo", due: "Сегодня" },
-  { id: "TASK-502", title: "Сверить статусы активных согласий", owner: "Приёмная комиссия", priority: "medium", status: "progress", due: "29 июля" },
+  { id: "TASK-501", title: "Проверить программы с высоким риском недобора", owner: "Аналитическая группа", priority: "high", status: "todo", due: "Сегодня" },
+  { id: "TASK-502", title: "Подготовить сценарий коммуникации до старта согласий", owner: "Приёмная комиссия", priority: "medium", status: "progress", due: "29 июля" },
   { id: "TASK-503", title: "Подготовить срез по платному спросу", owner: "Договорной отдел", priority: "low", status: "done", due: "Выполнено" },
 ];
 
 function Badge({ tone = "neutral", children }) { return <span className={`badge badge-${tone}`}>{children}</span>; }
-function Source({ type = "ais", children }) { return <span className={`source source-${type}`}>{children || (type === "plan" ? "План приёма" : type === "model" ? "Модель" : "АИС «Приём»")}</span>; }
+function Source({ type = "ais", children }) { return <span className={`source source-${type}`}>{children || (type === "plan" ? "План приёма" : type === "model" ? "Модель" : type === "status" ? "Статус кампании" : "АИС «Приём»")}</span>; }
 function Panel({ title, subtitle, action, className = "", children }) {
   return <section className={`panel ${className}`}><header className="panel-head"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div>{action}</header>{children}</section>;
 }
@@ -64,6 +64,23 @@ function modelValue(value, index, length, type) {
   const progress = length <= 1 ? 1 : index / (length - 1);
   const factor = type === "paid" ? .88 + .05 * progress : .90 + .04 * progress;
   return Math.round(value * factor);
+}
+
+const REAL_CONSENTS = 0;
+const EXPECTED_BUDGET_YIELD = 0.12;
+const expectedBudgetChoice = (slice) => Math.round(Number(slice?.potentialBudgetPeople || 0) * EXPECTED_BUDGET_YIELD);
+function riskFor(plan, expected) {
+  if (!plan) return { key: "none", label: "Нет плана", tone: "neutral", rank: 3, coverage: null };
+  const coverage = expected / plan;
+  if (coverage < .9) return { key: "high", label: "Высокий", tone: "high", rank: 0, coverage };
+  if (coverage < 1.15) return { key: "medium", label: "Средний", tone: "medium", rank: 1, coverage };
+  return { key: "low", label: "Низкий", tone: "green", rank: 2, coverage };
+}
+function actionForRisk(risk) {
+  if (risk.key === "high") return "Усилить целевой набор: обзвон приоритетов 1–2, высокобалльники и реклама.";
+  if (risk.key === "medium") return "Персонально отработать приоритеты 1–2 и проверить конкурирующие программы.";
+  if (risk.key === "low") return "Удерживать интерес и готовить перевод части спроса в платный набор.";
+  return "Сверить распределение контрольных цифр приёма.";
 }
 
 function DynamicsChart({ rows, type = "main" }) {
@@ -143,36 +160,56 @@ function currentDynamics(filters) {
 
 function Overview({ filters, programs, faculties, navigate }) {
   const scope = data.scopes[`${filters.level}|${filters.form}|${filters.basis}`] || data.scopes[`${filters.level}|Все формы|${filters.basis}`] || {};
+  const officialPlan = data.officialTotals[filters.level]?.[filters.form] || data.officialTotals[filters.level]?.["Все формы"] || { budget: 0, paid: 0 };
   const visiblePrograms = programs.filter((program) => program.level === filters.level && (filters.faculty === "all" || program.faculty === filters.faculty) && (filters.program === "all" || program.id === filters.program));
   const visibleFaculties = faculties.filter((faculty) => faculty.level === filters.level && (filters.faculty === "all" || faculty.name === filters.faculty));
-  const budgetFilled = visiblePrograms.reduce((sum, program) => sum + Math.min(planFor(program, filters.form).budget, sliceFor(program, filters.form, "budget").activeConsentPeople || 0), 0);
+  const programRisks = visiblePrograms.filter((program) => planFor(program, filters.form).budget > 0).map((program) => {
+    const plan = planFor(program, filters.form).budget;
+    const budgetSlice = sliceFor(program, filters.form, "budget");
+    const expected = expectedBudgetChoice(budgetSlice);
+    const risk = riskFor(plan, expected);
+    return { program, plan, expected, rawPotential: budgetSlice.potentialBudgetPeople || 0, risk };
+  });
+  const highRiskCount = programRisks.filter((item) => item.risk.key === "high").length;
+  const facultyRows = visibleFaculties.map((faculty) => {
+    const facultyPrograms = visiblePrograms.filter((program) => program.faculty === faculty.name);
+    const plan = facultyPrograms.reduce((sum, program) => sum + planFor(program, filters.form).budget, 0);
+    const budgetSlice = sliceFor(faculty, filters.form, "budget");
+    const expected = expectedBudgetChoice(budgetSlice);
+    const risk = riskFor(plan, expected);
+    return { faculty, plan, expected, rawPotential: budgetSlice.potentialBudgetPeople || 0, submitted: budgetSlice.people || 0, applications: budgetSlice.applications || 0, risk };
+  });
+  const focus = [...programRisks].sort((a, b) => a.risk.rank - b.risk.rank || (a.risk.coverage || 0) - (b.risk.coverage || 0)).slice(0, 5);
   const dynamics = currentDynamics(filters);
   return <>
-    <div className="explain"><ShieldCheck/><span><b>Единицы учёта разделены.</b> Люди считаются по номеру личного дела, заявления — по образовательным программам. Рязанский филиал исключён.</span><Source/><Source type="plan"/></div>
+    <div className="warning consent-stage"><WarningCircle/><span><b>Реальных согласий на зачисление пока нет.</b> Приём согласий ещё не начался, поэтому выполнение бюджетного плана не рассчитывается. Риск ниже — модель по спросу и приоритетам, а не факт зачисления.</span><Source type="status"/><Source type="model"/></div>
     <div className="metrics metrics-seven">
-      <Metric label="Потенциальные абитуриенты" value="100 000" detail="контактная база проекта · без склейки с АИС" icon={UsersThree} source="model"/>
+      <Metric label="План приёма" value={fmt(officialPlan.budget)} detail={`бюджетных мест · ${fmt(officialPlan.paid)} платных`} icon={Buildings} source="plan"/>
+      <Metric label="Потенциальные абитуриенты" value="100 000" detail="контактная база проекта · пока без распределения по факультетам" icon={UsersThree} source="model"/>
       <Metric label="Подали заявление, людей" value={fmt(scope.people)} detail="уникальные личные дела" icon={FileText}/>
       <Metric label="Заявления по программам" value={fmt(scope.applications)} detail="человек × образовательная программа" icon={ArrowsLeftRight} tone="violet"/>
-      <Metric label="Активные согласия" value={fmt(scope.activeConsentPeople)} detail={`${fmt(scope.consentPeople)} человек подали согласие`} icon={CheckCircle} tone="green"/>
+      <Metric label="Согласия, факт" value={fmt(REAL_CONSENTS)} detail="приём согласий ещё не начался" icon={CheckCircle} tone="red" source="status"/>
       <Metric label="Высокобалльники 85+" value={fmt(scope.highScorers)} detail="математика 85+ и физика / информатика 85+" icon={Target} tone="red" emphasis/>
-      <Metric label="Бюджетный план" value={fmt(scope.planBudget)} detail={`${fmt(budgetFilled)} мест в текущих верхних списках`} icon={Buildings} source="plan"/>
-      <Metric label="Платный план" value={fmt(scope.planPaid)} detail={`${fmt(scope.paidRows)} строк платного спроса · договоры не загружены`} icon={CurrencyRub} tone="violet" source="plan"/>
+      <Metric label="Программы с риском" value={fmt(highRiskCount)} detail="высокий риск по модели реализации потенциального выбора" icon={WarningCircle} tone="red" source="model"/>
     </div>
-    <div className="overview-grid">
-      <Panel title="Факультеты и институты" subtitle="Спрос, согласия и программы в выбранном срезе" action={<button className="text-button" onClick={() => navigate("directions")}>Все программы <CaretRight/></button>}>
-        <div className="faculty-cards">{visibleFaculties.map((faculty) => {
-          const slice = sliceFor(faculty, filters.form, filters.basis);
-          const facultyPrograms = visiblePrograms.filter((program) => program.faculty === faculty.name);
-          const plan = facultyPrograms.reduce((sum, program) => sum + planFor(program, filters.form).budget, 0);
-          const filled = facultyPrograms.reduce((sum, program) => sum + Math.min(planFor(program, filters.form).budget, sliceFor(program, filters.form, "budget").activeConsentPeople || 0), 0);
-          const rate = plan ? filled / plan * 100 : 0;
-          return <button key={faculty.name} onClick={() => navigate("directions", faculty.name)}><span className="faculty-abbr">{faculty.name.split(" ").filter((word) => word.length > 3).slice(0, 2).map((word) => word[0]).join("")}</span><span><b>{faculty.name}</b><small>{fmt(slice.people)} людей · {fmt(slice.applications)} заявлений · {fmt(slice.activeConsentPeople)} активных согласий</small><Progress value={rate} tone={rate < 60 ? "red" : rate < 85 ? "orange" : "green"}/></span><strong>{plan ? pct(rate) : "—"}</strong></button>;
-        })}</div>
+    <div className="management-overview">
+      <Panel title="Ситуация по бюджетному набору" subtitle="План, спрос, прогноз выбора, согласия и управленческое действие" action={<button className="text-button" onClick={() => navigate("directions")}>Все программы <CaretRight/></button>} className="situation-panel">
+        <div className="situation-table">
+          <div className="situation-row situation-head"><span>Факультет / институт</span><span>План бюджета</span><span>Потенциально выберут</span><span>Подали, людей</span><span>Согласия</span><span>Риск</span><span>Управленческое действие</span></div>
+          {facultyRows.map((row) => <button className="situation-row" key={row.faculty.name} onClick={() => navigate("directions", row.faculty.name)}>
+            <span className="situation-name" data-label="Факультет / институт"><i>{row.faculty.name.split(" ").filter((word) => word.length > 3).slice(0, 2).map((word) => word[0]).join("")}</i><b>{row.faculty.name}</b></span>
+            <span data-label="План бюджета"><b>{row.plan ? fmt(row.plan) : "—"}</b><small>мест</small></span>
+            <span data-label="Потенциально выберут"><b>{fmt(row.expected)}</b><small>модель из {fmt(row.rawPotential)} приоритетов 1–2</small></span>
+            <span data-label="Подали, людей"><b>{fmt(row.submitted)}</b><small>{fmt(row.applications)} заявлений</small></span>
+            <span data-label="Согласия"><b>{REAL_CONSENTS}</b><small>приём не начат</small></span>
+            <span data-label="Риск"><Badge tone={row.risk.tone}>{row.risk.label}</Badge></span>
+            <span className="situation-action" data-label="Действие">{actionForRisk(row.risk)}<CaretRight/></span>
+          </button>)}
+        </div>
+        <p className="footnote model-explainer">«Потенциально выберут» — модель: активные бюджетные заявления с приоритетом 1–2 × коэффициент реализации 12%. Это не согласия и не прогноз зачисления.</p>
       </Panel>
-      <Panel title="Управленческий фокус" subtitle="Программы с наибольшим разрывом до бюджетного плана">
-        <div className="focus-list">{visiblePrograms.filter((program) => planFor(program, filters.form).budget > 0).map((program) => {
-          const plan = planFor(program, filters.form).budget; const active = sliceFor(program, filters.form, "budget").activeConsentPeople || 0; return { program, gap: Math.max(0, plan - active), plan, active };
-        }).sort((a, b) => b.gap - a.gap).slice(0, 5).map(({ program, gap, plan, active }, index) => <button key={program.id} onClick={() => navigate("directions", program.faculty, program.id)}><em>{index + 1}</em><span><b>{program.code} · {program.name}</b><small>{active} активных согласий / {plan} мест</small></span><Badge tone={gap > plan * .5 ? "high" : "medium"}>−{gap}</Badge></button>)}</div>
+      <Panel title="Управленческий фокус" subtitle="Программы, где модельный потенциал ниже бюджетного плана">
+        <div className="focus-list risk-focus">{focus.map(({ program, plan, expected, risk }, index) => <button key={program.id} onClick={() => navigate("directions", program.faculty, program.id)}><em>{index + 1}</em><span><b>{program.code} · {program.name}</b><small>план {fmt(plan)} · потенциально {fmt(expected)} · согласия 0</small><p>{actionForRisk(risk)}</p></span><Badge tone={risk.tone}>{risk.label}</Badge></button>)}</div>
       </Panel>
     </div>
     <div className="chart-grid">
@@ -188,18 +225,20 @@ function DirectionsView({ filters, programs, setFilters, addTask }) {
   const groups = useMemo(() => Object.entries(visible.reduce((acc, program) => { (acc[program.groupCode] ||= []).push(program); return acc; }, {})).sort((a, b) => a[0].localeCompare(b[0], "ru")), [visible]);
   const selected = visible.find((program) => program.id === filters.program) || visible[0];
   const selectProgram = (id) => setFilters((old) => ({ ...old, program: id }));
-  if (!selected) return <Empty>Нет программ в выбранном срезе</Empty>;
-  const plan = planFor(selected, filters.form); const slice = sliceFor(selected, filters.form, filters.basis); const budgetSlice = sliceFor(selected, filters.form, "budget");
-  const active = budgetSlice.activeConsentPeople || 0; const fill = plan.budget ? Math.min(100, active / plan.budget * 100) : 0;
+  if (!selected) return <Empty>Для выбранного среза нет программ</Empty>;
+  const slice = sliceFor(selected, filters.form, filters.basis); const budgetSlice = sliceFor(selected, filters.form, "budget"); const plan = planFor(selected, filters.form);
+  const rawPotential = budgetSlice.potentialBudgetPeople || 0; const expected = expectedBudgetChoice(budgetSlice); const risk = riskFor(plan.budget, expected);
+  const coverage = plan.budget ? Math.min(100, expected / plan.budget * 100) : 0;
   return <div className="split-view">
     <Panel title="Иерархия программ" subtitle={`${visible.length} программ · родительский код → программа`} action={<label className="search"><MagnifyingGlass/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Код или название"/></label>} className="program-list-panel">
       <div className="program-tree">{groups.map(([groupCode, items]) => <details key={groupCode} open={items.some((item) => item.id === selected.id)}><summary><span><CaretDown/><b>{groupCode}</b></span><Badge>{items.length}</Badge></summary>{items.map((program) => <button key={program.id} className={program.id === selected.id ? "selected" : ""} onClick={() => selectProgram(program.id)}><span><b>{program.code}</b><small>{program.name}</small><em>{program.faculty}</em></span><strong>{fmt(sliceFor(program, filters.form, filters.basis).applications)}</strong></button>)}</details>)}</div>
     </Panel>
     <div className="detail-stack">
       <Panel title={`${selected.code} · ${selected.name}`} subtitle={selected.faculty} action={<Source type="plan"/>}>
-        <div className="detail-metrics"><div><span>Людей</span><b>{fmt(slice.people)}</b></div><div><span>Заявлений</span><b>{fmt(slice.applications)}</b></div><div><span>Активные согласия</span><b>{fmt(slice.activeConsentPeople)}</b></div><div><span>Высокобалльники 85+</span><b>{fmt(slice.highScorers)}</b></div></div>
-        <div className="plan-grid"><article><span>Бюджет</span><strong>{Math.min(active, plan.budget)} / {plan.budget || "—"}</strong><Progress value={fill} tone={fill < 60 ? "red" : fill < 85 ? "orange" : "green"}/><small>текущий верхний список / план</small></article><article><span>Платный план</span><strong>{plan.paid || "—"}</strong><small>{fmt(slice.paidRows)} строк спроса; договоры не загружены</small></article><article><span>Средний балл верхнего списка</span><strong>{selected.topAverageScore ?? "—"}</strong><small>по активным согласиям в пределах плана</small></article><article><span>Текущая граница</span><strong>{selected.topBoundaryScore ?? "—"}</strong><small>балл последнего в верхнем списке · не проходной балл</small></article></div>
-        <div className="recommendation"><Sparkle/><span><b>Рекомендуемое действие</b><p>{plan.budget && active < plan.budget ? `До верхнего списка не хватает ${plan.budget - active} активных согласий. Отработать сильных кандидатов без согласия.` : "Контролировать удержание верхнего списка и переключить внимание на платный спрос."}</p></span><button onClick={() => addTask({ title: `Отработать ${selected.code} · ${selected.name}`, owner: selected.faculty, priority: active < plan.budget * .6 ? "high" : "medium" })}>В очередь</button></div>
+        <div className="consent-inline-note"><WarningCircle/><span><b>Согласия: 0.</b> Приём ещё не начат; ниже показана модель спроса.</span></div>
+        <div className="detail-metrics"><div><span>Людей</span><b>{fmt(slice.people)}</b></div><div><span>Заявлений</span><b>{fmt(slice.applications)}</b></div><div><span>Согласия, факт</span><b>{REAL_CONSENTS}</b></div><div><span>Высокобалльники 85+</span><b>{fmt(slice.highScorers)}</b></div></div>
+        <div className="plan-grid"><article><span>План приёма</span><strong>{plan.budget || "—"}</strong><small>бюджетных мест · {fmt(plan.paid)} платных</small></article><article><span>Потенциально выберут бюджет</span><strong>{fmt(expected)} / {plan.budget || "—"}</strong><Progress value={coverage} tone={risk.key === "high" ? "red" : risk.key === "medium" ? "orange" : "green"}/><small>модель 12% из {fmt(rawPotential)} активных приоритетов 1–2</small></article><article><span>Средний балл расчётного диапазона</span><strong>{selected.projectedAverageScore ?? "—"}</strong><small>модель без согласий, в пределах плана</small></article><article><span>Расчётная граница</span><strong>{selected.projectedBoundaryScore ?? "—"}</strong><small>не проходной балл и не факт зачисления</small></article></div>
+        <div className="recommendation"><Sparkle/><span><b>Риск недобора: {risk.label.toLowerCase()}</b><p>{actionForRisk(risk)}</p></span><button onClick={() => addTask({ title: `${actionForRisk(risk)} ${selected.code}`, owner: selected.faculty, priority: risk.key === "high" ? "high" : "medium" })}>В очередь</button></div>
       </Panel>
       <Panel title="Динамика выбранной программы" subtitle="Дата на ползунке меняет значения"><DynamicsChart rows={currentDynamics({ ...filters, program: selected.id })}/></Panel>
     </div>
@@ -209,22 +248,31 @@ function DirectionsView({ filters, programs, setFilters, addTask }) {
 function RankingView({ filters, programs, setFilters }) {
   const available = programs.filter((program) => program.level === filters.level && (filters.faculty === "all" || program.faculty === filters.faculty));
   const selected = available.find((program) => program.id === filters.program) || available[0];
-  const [consentOnly, setConsentOnly] = useState(false);
   if (!selected) return <Empty>Нет рейтинга в выбранном срезе</Empty>;
-  const rows = (data.rankings[selected.id] || []).filter((row) => (filters.form === "Все формы" || row.form === filters.form) && (filters.basis === "all" || row.basis === filters.basis) && (!consentOnly || row.consent));
+  const rows = (data.rankings[selected.id] || []).filter((row) => (filters.form === "Все формы" || row.form === filters.form) && (filters.basis === "all" || row.basis === filters.basis));
+  const budgetSlice = sliceFor(selected, filters.form, "budget"); const expected = expectedBudgetChoice(budgetSlice);
   return <>
-    <div className="ranking-toolbar"><label><span>Образовательная программа</span><select value={selected.id} onChange={(event) => setFilters((old) => ({ ...old, program: event.target.value }))}>{available.map((program) => <option key={program.id} value={program.id}>{program.code} · {program.name}</option>)}</select></label><label className="check"><input type="checkbox" checked={consentOnly} onChange={(event) => setConsentOnly(event.target.checked)}/> Только с согласием</label></div>
-    <div className="metrics compact-metrics"><Metric label="Бюджетных мест" value={fmt(planFor(selected, filters.form).budget)} detail={`платных: ${fmt(planFor(selected, filters.form).paid)}`} icon={Buildings} source="plan"/><Metric label="Средний балл верхнего списка" value={selected.topAverageScore ?? "—"} detail="активные согласия в пределах плана" icon={Target} tone="red"/><Metric label="Текущая граница" value={selected.topBoundaryScore ?? "—"} detail="динамический индикатор на дату среза" icon={TrendUp} tone="green"/></div>
-    <Panel title="Рейтинг" subtitle={`${selected.code} · ${rows.length} обезличенных строк`} action={<Source/>}><div className="table-wrap"><table><thead><tr><th>Место</th><th>Код абитуриента</th><th>Балл</th><th>Приоритет</th><th>Согласие</th><th>Статус</th><th>Верхний список</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.id}-${row.form}-${row.basis}`}><td>{row.place}</td><td><b>{row.id}</b></td><td><b>{row.score}</b></td><td>{row.priority === 999 ? "—" : row.priority}</td><td>{row.consent ? <Badge tone="green">Да</Badge> : <Badge>Нет</Badge>}</td><td>{row.status}</td><td>{row.topList ? <Badge tone="green">Проходит сейчас</Badge> : "—"}</td></tr>)}</tbody></table></div><p className="footnote">«Проходит сейчас» — расчётный верхний список на дату среза, не гарантия зачисления.</p></Panel>
+    <div className="warning"><WarningCircle/><span><b>Согласия на зачисление ещё не принимаются.</b> Рейтинг ниже показывает только обезличенные заявления и расчётный диапазон по приоритетам 1–2.</span><Source type="status"/><Source type="model"/></div>
+    <div className="ranking-toolbar"><label><span>Образовательная программа</span><select value={selected.id} onChange={(event) => setFilters((old) => ({ ...old, program: event.target.value }))}>{available.map((program) => <option key={program.id} value={program.id}>{program.code} · {program.name}</option>)}</select></label></div>
+    <div className="metrics metrics-four"><Metric label="Бюджетных мест" value={fmt(planFor(selected, filters.form).budget)} detail={`платных: ${fmt(planFor(selected, filters.form).paid)}`} icon={Buildings} source="plan"/><Metric label="Потенциально выберут" value={fmt(expected)} detail={`модель из ${fmt(budgetSlice.potentialBudgetPeople)} приоритетов 1–2`} icon={UsersThree} source="model"/><Metric label="Средний балл диапазона" value={selected.projectedAverageScore ?? "—"} detail="расчёт без согласий" icon={Target} tone="red" source="model"/><Metric label="Расчётная граница" value={selected.projectedBoundaryScore ?? "—"} detail="не проходной балл" icon={TrendUp} tone="green" source="model"/></div>
+    <Panel title="Рейтинг заявлений" subtitle={`${selected.code} · ${rows.length} обезличенных строк`} action={<Source/>}><div className="table-wrap"><table><thead><tr><th>Место</th><th>Код абитуриента</th><th>Балл</th><th>Приоритет</th><th>Статус заявления</th><th>Расчётный диапазон</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.id}-${row.form}-${row.basis}`}><td>{row.place}</td><td><b>{row.id}</b></td><td><b>{row.score}</b></td><td>{row.priority === 999 ? "—" : row.priority}</td><td>{row.status}</td><td>{row.topList ? <Badge tone="green">В диапазоне</Badge> : "—"}</td></tr>)}</tbody></table></div><p className="footnote">«В диапазоне» — модельная позиция по активным бюджетным заявлениям с приоритетом 1–2. Она не означает согласие или зачисление.</p></Panel>
   </>;
 }
 
 function ApplicantsView({ filters }) {
-  const [query, setQuery] = useState(""); const [selectedId, setSelectedId] = useState("");
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState("");
   const visible = data.applicants.filter((person) => `${person.id} ${person.segment}`.toLowerCase().includes(query.toLowerCase()) && (filters.faculty === "all" || person.faculties.includes(filters.faculty)) && (filters.program === "all" || person.applications.some((item) => item.programId === filters.program)));
   const person = visible.find((item) => item.id === selectedId) || visible[0];
   if (!person) return <Empty>В обезличенной выборке нет людей для выбранного среза</Empty>;
-  return <><div className="explain"><ShieldCheck/><span><b>Без персональных данных.</b> Идентификаторы сформированы специально для демонстрации; ФИО и контакты не публикуются.</span><Source/></div><div className="split-view applicants-view"><Panel title="Обезличенная выборка" subtitle={`${visible.length} реальных траекторий`} action={<label className="search"><MagnifyingGlass/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ID или сегмент"/></label>}><div className="people-list">{visible.map((item) => <button key={item.id} className={item.id === person.id ? "selected" : ""} onClick={() => setSelectedId(item.id)}><UserFocus/><span><b>{item.id}</b><small>{item.score} баллов · {item.applications.length} программ</small></span><Badge tone={item.segment.includes("85+") ? "high" : item.segment.includes("Согласие") ? "green" : "neutral"}>{item.segment}</Badge></button>)}</div></Panel><div className="detail-stack"><Panel title={person.id} subtitle={person.faculties.join(" · ")}><div className="detail-metrics"><div><span>Максимальный балл</span><b>{person.score}</b></div><div><span>Программ</span><b>{person.applications.length}</b></div><div><span>Сегмент</span><b className="small-value">{person.segment}</b></div></div></Panel><Panel title="Заявления и приоритеты" subtitle="Реальные обезличенные данные АИС"><div className="application-list">{person.applications.map((item) => <article key={item.programId}><span className="priority">{item.priority === 999 ? "—" : item.priority}</span><span><b>{item.code} · {item.name}</b><small>{item.faculty} · {item.form} · {item.basis === "budget" ? "бюджет" : "платное"}</small></span><strong>{item.score}</strong>{item.consent ? <Badge tone="green">Согласие</Badge> : <Badge>{item.status}</Badge>}</article>)}</div></Panel></div></div></>;
+  return <>
+    <div className="explain"><ShieldCheck/><span><b>Без персональных данных.</b> Идентификаторы сформированы специально для демонстрации; ФИО и контакты не публикуются.</span><Source/></div>
+    <div className="warning consent-stage"><WarningCircle/><span><b>Согласия ещё не собираются.</b> В карточках показаны только статус заявления и приоритет; фактических согласий — 0.</span><Source type="status"/></div>
+    <div className="split-view applicants-view">
+      <Panel title="Обезличенная выборка" subtitle={`${visible.length} реальных траекторий`} action={<label className="search"><MagnifyingGlass/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ID или сегмент"/></label>}><div className="people-list">{visible.map((item) => <button key={item.id} className={item.id === person.id ? "selected" : ""} onClick={() => setSelectedId(item.id)}><UserFocus/><span><b>{item.id}</b><small>{item.score} баллов · {item.applications.length} программ</small></span><Badge tone={item.segment.includes("85+") ? "high" : item.segment.includes("Приоритет") ? "medium" : "neutral"}>{item.segment}</Badge></button>)}</div></Panel>
+      <div className="detail-stack"><Panel title={person.id} subtitle={person.faculties.join(" · ")}><div className="detail-metrics"><div><span>Максимальный балл</span><b>{person.score}</b></div><div><span>Программ</span><b>{person.applications.length}</b></div><div><span>Сегмент</span><b className="small-value">{person.segment}</b></div></div></Panel><Panel title="Заявления и приоритеты" subtitle="Реальные обезличенные данные АИС"><div className="application-list">{person.applications.map((item) => <article key={item.programId}><span className="priority">{item.priority === 999 ? "—" : item.priority}</span><span><b>{item.code} · {item.name}</b><small>{item.faculty} · {item.form} · {item.basis === "budget" ? "бюджет" : "платное"}</small></span><strong>{item.score}</strong><Badge>{item.status}</Badge></article>)}</div></Panel></div>
+    </div>
+  </>;
 }
 
 function IntersectionsView({ filters, programs, setFilters }) {
@@ -256,13 +304,23 @@ function AnalyticsView({ filters, programs, faculties }) {
   const scope = data.scopes[`${filters.level}|${filters.form}|${filters.basis}`] || {};
   const rows = currentDynamics(filters);
   const visibleFaculties = faculties.filter((item) => item.level === filters.level);
-  return <><div className="chart-grid"><Panel title="Общий поток" subtitle="Сравнение 2026 с моделью 2025"><DynamicsChart rows={rows}/></Panel><Panel title="Платный спрос" subtitle="Платные заявления, не договоры"><DynamicsChart rows={rows} type="paid"/></Panel></div><div className="analytics-grid"><Panel title="Сегменты" subtitle="Выбранный глобальный срез"><div className="segment-grid">{[["Людей", scope.people], ["Заявлений", scope.applications], ["Активны", scope.activePeople], ["Согласия", scope.consentPeople], ["Активные согласия", scope.activeConsentPeople], ["Высокобалльники 85+", scope.highScorers]].map(([label, value]) => <article key={label}><span>{label}</span><b>{fmt(value)}</b></article>)}</div></Panel><Panel title="Факультеты и институты" subtitle="Сравнение в выбранном уровне"><div className="analytics-list">{visibleFaculties.slice(0, 12).map((faculty) => { const slice = sliceFor(faculty, filters.form, filters.basis); return <div key={faculty.name}><span><b>{faculty.name}</b><small>{fmt(slice.people)} людей</small></span><span><b>{fmt(slice.applications)}</b><small>заявлений</small></span><span><b>{fmt(slice.activeConsentPeople)}</b><small>активных согласий</small></span></div>; })}</div></Panel></div></>;
+  return <>
+    <div className="warning consent-stage"><WarningCircle/><span><b>Согласия: 0.</b> Пока этап не начался, аналитика показывает спрос и модель потенциального выбора, а не заполнение плана.</span><Source type="status"/><Source type="model"/></div>
+    <div className="chart-grid"><Panel title="Общий поток" subtitle="Сравнение 2026 с моделью 2025"><DynamicsChart rows={rows}/></Panel><Panel title="Платный спрос" subtitle="Платные заявления, не договоры"><DynamicsChart rows={rows} type="paid"/></Panel></div>
+    <div className="analytics-grid"><Panel title="Сегменты" subtitle="Выбранный глобальный срез"><div className="segment-grid">{[["Людей", scope.people], ["Заявлений", scope.applications], ["Активные личные дела", scope.activePeople], ["Потенциал бюджета", scope.potentialBudgetPeople], ["Согласия, факт", REAL_CONSENTS], ["Высокобалльники 85+", scope.highScorers]].map(([label, value]) => <article key={label}><span>{label}</span><b>{fmt(value)}</b></article>)}</div></Panel><Panel title="Факультеты и институты" subtitle="Спрос и модель выбора бюджета"><div className="analytics-list">{visibleFaculties.slice(0, 12).map((faculty) => { const slice = sliceFor(faculty, filters.form, filters.basis); const budgetSlice = sliceFor(faculty, filters.form, "budget"); return <div key={faculty.name}><span><b>{faculty.name}</b><small>{fmt(slice.people)} людей</small></span><span><b>{fmt(slice.applications)}</b><small>заявлений</small></span><span><b>{fmt(expectedBudgetChoice(budgetSlice))}</b><small>потенциально выберут · модель 12%</small></span></div>; })}</div></Panel></div>
+  </>;
 }
 
 function ReportsView({ toast }) { return <><div className="actions-row"><span><b>Отчёты сохраняют выбранный срез и методику</b><small>Персональные данные в публичную версию не попадают</small></span><button className="primary" onClick={() => toast("Отчёт поставлен в очередь")}>Сформировать отчёт</button></div><div className="report-grid">{["Сводка для руководства", "Срез по факультетам", "Срез по программам", "Контроль качества данных"].map((name, index) => <article key={name}><FileText/><Badge>{index === 0 ? "PDF" : "XLSX"}</Badge><h3>{name}</h3><p>План, спрос, согласия, риски и дата формирования.</p><button className="secondary" onClick={() => toast(`Подготовка: ${name}`)}><DownloadSimple/>Подготовить</button></article>)}</div></>;
 }
-function QualityView() { return <><div className="metrics compact-metrics"><Metric label="Строк исходной АИС" value={fmt(data.allExport.rows)} detail="технические конкурсные строки" icon={Database}/><Metric label="Людей во всей выгрузке" value={fmt(data.allExport.people)} detail="уникальные личные дела" icon={UsersThree} tone="green"/><Metric label="Образовательных программ" value={fmt(data.programs.length)} detail="с учётом профильных кодов" icon={GraduationCap} tone="violet"/></div><div className="quality-grid"><Panel title="Словарь показателей" subtitle="Как читать цифры"><div className="method-list">{Object.entries(data.definitions).map(([key, value]) => <article key={key}><b>{key === "people" ? "Люди" : key === "applications" ? "Заявления" : key === "highScorer" ? "Высокобалльник 85+" : key === "topList" ? "Верхний список" : "Модель 2025"}</b><p>{value}</p></article>)}</div></Panel><Panel title="Контроль источников" subtitle="Что подтверждено"><ul className="source-list"><li><i className="ok"/><span><b>АИС «Приём»</b><small>обезличенная выгрузка, {fmt(data.source.rows)} строк</small></span></li><li><i className="ok"/><span><b>Официальный план 2026</b><small>приказ № 17-ОД, приложение 2.4</small></span></li><li><i className="warn"/><span><b>CRM ↔ АИС</b><small>сквозная склейка пока не настроена</small></span></li><li><i className="warn"/><span><b>Модель 2025</b><small>визуализация, не официальная выгрузка</small></span></li></ul></Panel></div></>;
+function QualityView() {
+  const labels = { people: "Люди", applications: "Заявления", highScorer: "Высокобалльник 85+", potentialBudget: "Потенциальный выбор бюджета", topList: "Расчётный диапазон", model2025: "Модель 2025" };
+  return <>
+    <div className="metrics compact-metrics"><Metric label="Строк исходной АИС" value={fmt(data.allExport.rows)} detail="технические конкурсные строки" icon={Database}/><Metric label="Людей во всей выгрузке" value={fmt(data.allExport.people)} detail="уникальные личные дела" icon={UsersThree} tone="green"/><Metric label="Образовательных программ" value={fmt(data.programs.length)} detail="с учётом профильных кодов" icon={GraduationCap} tone="violet"/></div>
+    <div className="quality-grid"><Panel title="Словарь показателей" subtitle="Как читать цифры"><div className="method-list">{Object.entries(data.definitions).map(([key, value]) => <article key={key}><b>{labels[key] || key}</b><p>{value}</p></article>)}</div></Panel><Panel title="Контроль источников" subtitle="Что подтверждено"><ul className="source-list"><li><i className="ok"/><span><b>АИС «Приём»</b><small>обезличенная выгрузка, {fmt(data.source.rows)} строк</small></span></li><li><i className="ok"/><span><b>Официальный план 2026</b><small>приказ № 17-ОД, приложение 2.4</small></span></li><li><i className="warn"/><span><b>Согласия на зачисление</b><small>этап ещё не начат; фактическое значение — 0</small></span></li><li><i className="warn"/><span><b>CRM ↔ АИС</b><small>сквозная склейка пока не настроена</small></span></li><li><i className="warn"/><span><b>Модель 2025</b><small>визуализация, не официальная выгрузка</small></span></li></ul></Panel></div>
+  </>;
 }
+
 function SettingsView({ toast }) { const [auto, setAuto] = useState(true); return <div className="settings-grid"><Panel title="Обновление данных" subtitle="Будущий внутренний контур"><label className="setting"><span><b>Автоматическая синхронизация</b><small>После подключения внутреннего API</small></span><button className={`toggle ${auto ? "on" : ""}`} onClick={() => setAuto(!auto)}><i/></button></label><label className="field">Частота<select><option>Каждые 15 минут</option><option>Каждый час</option></select></label></Panel><Panel title="Пороговые сигналы" subtitle="Настройка управленческого внимания"><label className="field">Заполнение бюджета ниже, %<input type="number" defaultValue="70"/></label><label className="field">Нет движения, дней<input type="number" defaultValue="7"/></label></Panel><button className="primary save-settings" onClick={() => toast("Настройки сохранены")}>Сохранить настройки</button></div>; }
 
 export function App() {
